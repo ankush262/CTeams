@@ -1,0 +1,63 @@
+version: '3.8'
+
+# Docker Compose configuration for CTeams project
+# This file defines four services: MongoDB, Redis, Core API, and Web Dashboard
+# All services are connected via the cteams-network for inter-service communication
+
+services:
+  # MongoDB service - NoSQL database for storing application data
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - ./data/mongo:/data/db
+    env_file:
+      - .env
+    networks:
+      - cteams-network
+
+  # Redis service - In-memory data structure store for caching and session management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    networks:
+      - cteams-network
+
+  # Core API service - Backend API built with Python/FastAPI, handles business logic
+  core-api:
+    build: ./services/core-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./services/core-api:/app
+    depends_on:
+      - mongo
+      - redis
+    networks:
+      - cteams-network
+
+  # Web Dashboard service - Frontend React/Vue dashboard for user interface
+  web-dashboard:
+    build: ./services/web-dashboard
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - ./services/web-dashboard:/app
+      - /app/node_modules  # Exclude node_modules from bind mount for proper dependency management
+    depends_on:
+      - core-api
+    networks:
+      - cteams-network
+
+# Custom network for all services to communicate with each other
+networks:
+  cteams-network:
+    driver: bridge

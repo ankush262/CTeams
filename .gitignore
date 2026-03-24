@@ -1,0 +1,21 @@
+# Secrets
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.env-py
+
+# Node
+node_modules/
+.next/
+
+# Data volumes
+data/mongo/
+data/redis/
+
+# IDE and OS
+.DS_Store
+.vscode/

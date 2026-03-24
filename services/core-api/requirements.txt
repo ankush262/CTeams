@@ -1,0 +1,14 @@
+fastapi==0.111.0  # Web framework for building APIs quickly with type hints and async support
+uvicorn[standard]==0.23.2  # ASGI server to run FastAPI applications efficiently
+motor==4.4.0  # Asynchronous MongoDB driver for non-blocking database operations
+beanie==1.24.0  # Async ODM for MongoDB built on top of Motor and Pydantic
+python-jose[cryptography]==3.3.0  # JWT creation/verification library for secure auth tokens
+passlib[bcrypt]==1.7.4  # Password hashing and verification using bcrypt for secure login
+python-multipart==0.0.6  # Handles multipart/form-data submissions (file uploads)
+groq==0.1.0  # Groq AI Python client library to call Groq model APIs
+chromadb==0.4.0  # Vector database for similarity search and embedding storage
+redis==4.9.0  # Redis client for sessions, caching, and pub/sub
+python-dotenv==1.0.0  # Load environment variables from .env files in development
+pydantic[email]==2.8.0  # Data validation and settings management with email-type helpers
+pydantic-settings==2.0.2  # Structured settings management for Pydantic-based config
+httpx==0.25.0  # Async HTTP client for external API calls from Python code
