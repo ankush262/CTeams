@@ -5,145 +5,123 @@ import os
 import numpy as np
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
 from google import genai
 from google.genai import types
 
-# Load .env from backend folder first, then try root .env as fallback
-load_dotenv()
-# Also try loading from the project root (two levels up) for shared keys
-_root_env = os.path.join(os.path.dirname(__file__), "..", "..", ".env")
-if os.path.exists(_root_env):
-    load_dotenv(_root_env, override=False)
-
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("meet-live-transcriber")
 
-# ── Gemini Live client ────────────────────────────────────────────────────────
-_api_key = os.getenv("GEMINI_API_KEY")
-if not _api_key:
-    raise RuntimeError("GEMINI_API_KEY not set — add it to backend/.env or root .env")
+load_dotenv()
 
-client = genai.Client(api_key=_api_key)
-logger.info("Gemini client ready (key: %s…%s)", _api_key[:8], _api_key[-4:])
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyA_lSKHa3Re2Knu5pQydG_KDpcsFeYxaaw")
+MODEL_NAME = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-native-audio-preview-09-2025")
+SAMPLE_RATE = 16000
 
-app = FastAPI(title="Meet Live Transcriber")
+app = FastAPI(title="Meet Live Transcriber Backend")
 
-# CORS — allow extension offscreen documents & local dev
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
-# Model — use env var with a current default (old model was retired Dec 2025)
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-live-preview")
-SAMPLE_RATE = 16_000  # must match what the extension sends
-
-logger.info("Using model: %s", MODEL)
-
-LIVE_CONFIG = types.LiveConnectConfig(
-    response_modalities=["TEXT"],
-    system_instruction=(
-        "You are a real-time English transcription service. "
-        "ALWAYS transcribe in English regardless of the language spoken. "
-        "If the speaker is speaking Hindi or any other non-English language, "
-        "transliterate or translate it into English. "
-        "Output complete sentences and phrases — at least 15 words when possible. "
-        "Accumulate audio context before responding so each response is a full, "
-        "meaningful phrase rather than just 2-3 characters. "
-        "Output only the transcribed text — no labels, no commentary, no blank responses."
-    ),
-)
+LIVE_CONFIG = {
+    "response_modalities": ["AUDIO"],
+    "input_audio_transcription": {},
+}
 
 
 @app.get("/health")
-async def health():
-    """Simple health check for debugging."""
+async def health() -> dict:
     return {
         "status": "ok",
-        "model": MODEL,
-        "api_key_set": bool(_api_key),
+        "model": MODEL_NAME,
+        "provider": "gemini",
+        "api_key_set": bool(GEMINI_API_KEY),
+        "sample_rate": SAMPLE_RATE,
     }
 
 
 @app.websocket("/transcribe")
-async def transcribe_ws(websocket: WebSocket):
-    """
-    Accepts raw Float32 PCM bytes streamed at 16 kHz mono.
-    Each chunk is forwarded directly to the Gemini Live API.
-    Transcribed text is streamed back in real-time.
-    """
+async def transcribe_ws(websocket: WebSocket) -> None:
     await websocket.accept()
-    logger.info("Extension connected — opening Gemini Live session")
+    logger.info("WebSocket connected: /transcribe")
+
+    audio_queue: asyncio.Queue[bytes] = asyncio.Queue(maxsize=200)
+
+    async def extension_reader() -> None:
+        try:
+            while True:
+                data = await websocket.receive_bytes()
+                try:
+                    audio_queue.put_nowait(data)
+                except asyncio.QueueFull:
+                    # Drop chunks under backpressure to preserve realtime behavior.
+                    pass
+        except WebSocketDisconnect:
+            logger.info("Extension disconnected (reader)")
+
+    reader_task = asyncio.create_task(extension_reader())
 
     try:
-        async with client.aio.live.connect(model=MODEL, config=LIVE_CONFIG) as session:
-            logger.info("Gemini Live session established with model=%s", MODEL)
-
-            # ── Background task: receive transcriptions from Gemini ───────────
-            async def _recv_loop():
-                try:
-                    async for msg in session.receive():
-                        text = None
-                        # Shortcut property (newer SDK versions)
-                        if getattr(msg, "text", None):
-                            text = msg.text
-                        # Explicit server_content path
-                        elif (
-                            getattr(msg, "server_content", None)
-                            and getattr(msg.server_content, "model_turn", None)
-                            and getattr(msg.server_content.model_turn, "parts", None)
-                        ):
-                            text = "".join(
-                                p.text
-                                for p in msg.server_content.model_turn.parts
-                                if getattr(p, "text", None)
-                            )
-                        if text and text.strip():
-                            logger.info("Transcribed: %s", text.strip())
-                            await websocket.send_text(text.strip())
-                except asyncio.CancelledError:
-                    pass
-                except Exception as exc:
-                    logger.error("Gemini receive error: %s", exc, exc_info=True)
-
-            recv_task = asyncio.create_task(_recv_loop())
-
-            # ── Main loop: forward audio from extension → Gemini ─────────────
+        while not reader_task.done():
             try:
-                while True:
-                    data = await websocket.receive_bytes()
+                async with client.aio.live.connect(model=MODEL_NAME, config=LIVE_CONFIG) as session:
+                    logger.info("Gemini live session opened")
 
-                    # Float32 → int16 PCM (required by Gemini Live audio/pcm)
-                    f32 = np.frombuffer(data, dtype=np.float32)
-                    pcm16 = (np.clip(f32, -1.0, 1.0) * 32767).astype(np.int16)
+                    async def recv_loop() -> None:
+                        try:
+                            async for response in session.receive():
+                                content = response.server_content
+                                if not content:
+                                    continue
 
-                    await session.send(
-                        input=types.LiveClientRealtimeInput(
-                            media_chunks=[
-                                types.Blob(
-                                    mime_type="audio/pcm",
+                                if content.input_transcription and content.input_transcription.text:
+                                    text = content.input_transcription.text.strip()
+                                    if text:
+                                        await websocket.send_text(text)
+                                elif content.model_turn and content.model_turn.parts:
+                                    text = "".join(
+                                        p.text for p in content.model_turn.parts if getattr(p, "text", None)
+                                    ).strip()
+                                    if text:
+                                        await websocket.send_text(text)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:
+                            logger.exception("Gemini receive loop failed")
+
+                    recv_task = asyncio.create_task(recv_loop())
+
+                    try:
+                        while not reader_task.done() and not recv_task.done():
+                            try:
+                                data = await asyncio.wait_for(audio_queue.get(), timeout=5.0)
+                            except asyncio.TimeoutError:
+                                continue
+
+                            f32 = np.frombuffer(data, dtype=np.float32)
+                            if f32.size == 0:
+                                continue
+
+                            pcm16 = (np.clip(f32, -1.0, 1.0) * 32767).astype(np.int16)
+
+                            await session.send_realtime_input(
+                                audio=types.Blob(
                                     data=pcm16.tobytes(),
+                                    mime_type="audio/pcm;rate=16000",
                                 )
-                            ]
-                        )
-                    )
-
+                            )
+                    finally:
+                        recv_task.cancel()
+                        try:
+                            await recv_task
+                        except asyncio.CancelledError:
+                            pass
             except WebSocketDisconnect:
-                logger.info("Extension disconnected")
-            finally:
-                recv_task.cancel()
-                try:
-                    await recv_task
-                except asyncio.CancelledError:
-                    pass
-
-    except Exception as exc:
-        logger.error("Gemini Live session error: %s", exc, exc_info=True)
+                break
+            except Exception:
+                logger.exception("Gemini session error, reconnecting")
+                await asyncio.sleep(1)
+    finally:
+        reader_task.cancel()
         try:
-            await websocket.close(code=1011, reason=str(exc))
-        except Exception:
+            await reader_task
+        except asyncio.CancelledError:
             pass

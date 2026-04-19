@@ -74,7 +74,6 @@ async def receive_chunk(body: TranscriptChunkCreate):
 
     # Fire-and-forget AI processing on the original full text
     asyncio.create_task(groq_service.extract_action_items(meeting_id, body.text))
-    asyncio.create_task(groq_service.detect_and_schedule_event_from_chunk(meeting_id, body.text))
 
     if meeting.transcript_chunks % 5 == 0:
         asyncio.create_task(groq_service.summarize_transcript(meeting_id))

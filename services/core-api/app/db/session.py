@@ -18,7 +18,6 @@ async def init_db() -> None:
     global client
 
     from app.models.action_item import ActionItem
-    from app.models.google_integration import GoogleIntegration
     from app.models.meeting import Meeting
     from app.models.transcript import Transcript
 
@@ -40,7 +39,7 @@ async def init_db() -> None:
 
     await init_beanie(
         database=db,
-        document_models=[Meeting, Transcript, ActionItem, GoogleIntegration],
+        document_models=[Meeting, Transcript, ActionItem],
     )
 
 

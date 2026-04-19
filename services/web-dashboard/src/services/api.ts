@@ -107,39 +107,6 @@ export const getDebrief = (meetingId: string): Promise<Debrief | null> =>
     throw e;
   });
 
-// ── Google Calendar / Scheduling endpoints ────────────────────────────────────
-
-export interface CalendarEvent {
-  id: string;
-  title: string;
-  start: string;
-  end: string;
-  location?: string;
-  description?: string;
-  html_link?: string;
-}
-
-export interface ScheduleBody {
-  title: string;
-  start_iso: string;
-  end_iso: string;
-  description?: string;
-  location?: string;
-}
-
-export const getGoogleStatus = (): Promise<{ connected: boolean; auto_schedule_enabled: boolean }> =>
-  api.get('/api/integrations/google/status').then((r) => r.data);
-
-export const getGoogleAuthUrl = (): Promise<{ auth_url: string }> =>
-  api.get('/api/integrations/google/auth-url').then((r) => r.data);
-
-export const getUpcomingEvents = (maxResults = 10): Promise<CalendarEvent[]> =>
-  api.get<{ events: CalendarEvent[] }>(`/api/integrations/google/upcoming?max_results=${maxResults}`)
-    .then((r) => r.data.events);
-
-export const scheduleMeeting = (body: ScheduleBody): Promise<{ scheduled: boolean; event: any }> =>
-  api.post('/api/integrations/google/schedule/manual', body).then((r) => r.data);
-
 // ── WebSocket helper ──────────────────────────────────────────────────────────
 
 export function connectWebSocket(meetingId: string): WebSocket {

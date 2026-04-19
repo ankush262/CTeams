@@ -1,176 +1,713 @@
-/*
-  MeetMind Chrome Extension — background.js (Manifest V3 service worker)
+const OFFSCREEN_URL = "offscreen.html";
+const DEFAULT_WS_BASE_URL = "ws://localhost:8000";
+const DEFAULT_API_BASE_URL = "http://localhost:8000";
+const DEFAULT_DASHBOARD_URL = "http://localhost:3000/dashboard";
+const SCREENSHOT_INTERVAL_MS = 15000;
+const SIGNIFICANT_VISUAL_DIFF = 0.14;
+const DEMO_DIALOGUE_MODE = true;
 
-  WHAT A SERVICE WORKER IS IN CHROME EXTENSIONS:
-  - In Manifest V3, the background script is a service worker.
-  - It is event-driven: Chrome wakes it up when events/messages arrive,
-    it handles work, then can be suspended when idle.
-  - This is the extension's central coordinator for long-lived logic such
-    as capture session state and inter-component messaging.
+const DEMO_DIALOGUE_LINES = [
+  "Aisha: We need to finalize the Q2 onboarding launch plan by Friday.",
+  "Rohan: Action item assign to Priya to publish the onboarding checklist by Thursday.",
+  "Aisha: Please schedule a follow up meeting next Tuesday to review launch readiness.",
+  "Rohan: Open question pending legal approval for customer data retention wording.",
+  "Aisha: Action item for me to send the final stakeholder update by 5 PM tomorrow.",
+  "Rohan: Priya completed the onboarding checklist update and shared it in Notion.",
+  "Aisha: Decision approved we will launch the new flow in two phases.",
+  "Rohan: Next step is to track activation metrics and report blockers in the weekly sync.",
+];
 
-  MV3 AUDIO CAPTURE ARCHITECTURE:
-  - Service workers do NOT have DOM access, so AudioContext/MediaStream are
-    unavailable here.
-  - Instead, we use an offscreen document (offscreen.html + offscreen.js)
-    which has full DOM access and handles all audio processing.
-  - This service worker orchestrates: gets the tab capture stream ID,
-    creates the offscreen document, and passes the stream ID to it.
-  - The offscreen document captures audio, buffers PCM frames, creates WAV
-    files, and POSTs them to the backend for Groq Whisper transcription.
-*/
+const CALL_URL_PATTERNS = [
+  /^https:\/\/meet\.google\.com\//i,
+  /^https:\/\/([a-z0-9-]+\.)?zoom\.us\//i,
+  /^https:\/\/([a-z0-9-]+\.)?teams\.microsoft\.com\//i,
+];
 
-let activeMeetingId = null;
-let activeTabId = null;
-let hasOffscreenDocument = false;
-
-// ── Offscreen Document Management ───────────────────────────────────────────
-
-async function ensureOffscreenDocument() {
-  if (hasOffscreenDocument) return;
-
-  // Check if an offscreen document already exists (e.g. from a previous session)
-  const existingContexts = await chrome.runtime.getContexts({
-    contextTypes: ['OFFSCREEN_DOCUMENT'],
-  });
-
-  if (existingContexts.length > 0) {
-    hasOffscreenDocument = true;
-    return;
-  }
-
-  try {
-    await chrome.offscreen.createDocument({
-      url: 'offscreen.html',
-      reasons: ['USER_MEDIA'],
-      justification: 'Tab audio capture for real-time meeting transcription',
-    });
-    hasOffscreenDocument = true;
-  } catch (err) {
-    // Document might already exist from a race condition
-    if (err.message && err.message.includes('already exists')) {
-      hasOffscreenDocument = true;
-    } else {
-      throw err;
-    }
-  }
-}
-
-async function closeOffscreenDocument() {
-  if (!hasOffscreenDocument) return;
-  try {
-    await chrome.offscreen.closeDocument();
-  } catch {
-    // Ignore — document may already be closed
-  }
-  hasOffscreenDocument = false;
-}
-
-// ── Tab Capture ─────────────────────────────────────────────────────────────
-
-async function startCapture({ meetingId, tabId }) {
-  try {
-    // Stop any existing capture first
-    if (activeMeetingId) {
-      await stopCapture();
-    }
-
-    activeMeetingId = meetingId;
-    activeTabId = tabId;
-
-    // 1. Get a stream ID for the target tab's audio.
-    //    This is the MV3 way — the service worker gets a stream ID,
-    //    then passes it to a context that can use getUserMedia().
-    const streamId = await chrome.tabCapture.getMediaStreamId({
-      targetTabId: tabId,
-    });
-
-    // 2. Create the offscreen document (if not already present).
-    await ensureOffscreenDocument();
-
-    // 3. Tell the offscreen document to start capturing with this stream ID.
-    chrome.runtime.sendMessage({
-      type: 'START_OFFSCREEN_CAPTURE',
-      streamId: streamId,
-      meetingId: meetingId,
-    });
-
-    return { success: true };
-  } catch (error) {
-    activeMeetingId = null;
-    activeTabId = null;
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-async function stopCapture() {
-  try {
-    // Tell offscreen document to stop capture and flush remaining audio
-    if (hasOffscreenDocument) {
-      chrome.runtime.sendMessage({ type: 'STOP_OFFSCREEN_CAPTURE' });
-    }
-
-    activeMeetingId = null;
-    activeTabId = null;
-
-    // Close offscreen document after a brief delay to let it flush
-    setTimeout(() => closeOffscreenDocument(), 2000);
-
-    return { success: true };
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-// ── Message Handler ─────────────────────────────────────────────────────────
+const state = {
+  active: false,
+  tabId: null,
+  windowId: null,
+  meetingId: null,
+  startedAt: null,
+  wsBaseUrl: DEFAULT_WS_BASE_URL,
+  apiBaseUrl: DEFAULT_API_BASE_URL,
+  transcript: [],
+  rollingSummary: "",
+  actions: [],
+  screenshots: [],
+  debtLog: {},
+  notes: [],
+  screenshotTimer: null,
+  dialogueTimer: null,
+  dialogueIndex: 0,
+  lastVisualHash: null,
+};
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || !message.type) return false;
-
-  // From popup: start audio capture
-  if (message.type === 'START_CAPTURE') {
-    startCapture(message.payload || {}).then(sendResponse);
-    return true; // Keep message channel open for async response
-  }
-
-  // From popup: stop audio capture
-  if (message.type === 'STOP_CAPTURE') {
-    stopCapture().then(sendResponse);
+  if (message.type === "START_TRANSCRIBE") {
+    const effectiveTabId = message.tabId ?? sender?.tab?.id;
+    startMeetingIntelligence(effectiveTabId, sendResponse);
     return true;
   }
 
-  // From popup: get current capture status
-  if (message.type === 'GET_STATUS') {
-    sendResponse({
-      isCapturing: Boolean(activeMeetingId),
-      meetingId: activeMeetingId,
-    });
-    return false;
+  if (message.type === "STOP_TRANSCRIBE") {
+    stopMeetingIntelligence()
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
 
-  // From offscreen: capture started confirmation
-  if (message.type === 'OFFSCREEN_CAPTURE_STARTED') {
-    console.log('[bg] Offscreen capture started for meeting:', activeMeetingId);
-    return false;
+  if (message.type === "TRANSCRIPTION") {
+    processTranscriptLine(message.text);
+    sendResponse({ ok: true });
+    return true;
   }
 
-  // From offscreen: capture error
-  if (message.type === 'OFFSCREEN_CAPTURE_ERROR') {
-    console.error('[bg] Offscreen capture error:', message.error);
-    return false;
+  if (message.type === "GET_MEETING_STATE") {
+    sendResponse(getPublicMeetingState());
+    return true;
   }
 
-  // From offscreen: transcript result from Whisper
-  if (message.type === 'TRANSCRIPT_FROM_AUDIO') {
-    // This is informational — the actual transcript is already broadcast via
-    // WebSocket by the backend. Popup receives it through its WS connection.
-    return false;
+  if (message.type === "EXPORT_LAST_DEBRIEF") {
+    exportLastDebrief().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === "CLEAR_DEBT_LOG") {
+    chrome.storage.local.set({ debtLog: {} }).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === "OPEN_DASHBOARD") {
+    openDashboardTab().then(() => sendResponse({ ok: true }));
+    return true;
   }
 
   return false;
 });
+
+async function openDashboardTab() {
+  const settings = await chrome.storage.local.get(["dashboardUrl"]);
+  const base = settings.dashboardUrl || DEFAULT_DASHBOARD_URL;
+  const url = state.meetingId ? `${base.replace(/\/$/, "")}/meeting/${state.meetingId}` : base;
+  await chrome.tabs.create({ url });
+}
+
+async function startMeetingIntelligence(tabId, sendResponse) {
+  try {
+    if (!tabId) {
+      sendResponse({ ok: false, error: "Could not determine active meeting tab." });
+      return;
+    }
+
+    const tab = await chrome.tabs.get(tabId);
+    if (!isCallTab(tab.url)) {
+      sendResponse({ ok: false, error: "Open a Meet, Zoom, or Teams tab first." });
+      return;
+    }
+
+    if (state.active) {
+      await stopMeetingIntelligence();
+    }
+
+    resetStateForNewMeeting(tabId, tab.windowId || chrome.windows.WINDOW_ID_CURRENT);
+
+    const settings = await chrome.storage.local.get(["transcribeWsUrl", "apiBaseUrl"]);
+    state.wsBaseUrl = normalizeWsBase(settings.transcribeWsUrl || DEFAULT_WS_BASE_URL);
+    state.apiBaseUrl = normalizeHttpBase(settings.apiBaseUrl || DEFAULT_API_BASE_URL);
+
+    const meeting = await ensureActiveMeeting(tab.title || "Live Meeting");
+    state.meetingId = meeting?.id || null;
+
+    if (!state.meetingId) {
+      sendResponse({ ok: false, error: "Could not create or fetch active meeting." });
+      return;
+    }
+
+    state.active = true;
+    await chrome.storage.session.set({ transcribing: true });
+    startScreenshotMonitor();
+    startDialogueSimulation();
+    broadcastLiveUpdate();
+
+    chrome.runtime.sendMessage({
+      type: "STATUS_UPDATE",
+      text: DEMO_DIALOGUE_MODE
+        ? "Demo dialogue mode active (auto transcript every 5-7s)."
+        : "Live transcription started.",
+    }).catch(() => {});
+
+    sendResponse({ ok: true, demoMode: DEMO_DIALOGUE_MODE });
+  } catch (err) {
+    sendResponse({ ok: false, error: err.message });
+  }
+}
+
+async function stopMeetingIntelligence() {
+  if (!state.active && !state.startedAt) {
+    return;
+  }
+
+  stopDialogueSimulation();
+
+  clearScreenshotMonitor();
+  await chrome.storage.session.set({ transcribing: false });
+
+  if (state.meetingId) {
+    await endMeeting(state.meetingId);
+  }
+
+  const debrief = await createDebrief();
+  await persistDebrief(debrief);
+  await mergeDebtLogIntoStorage();
+
+  sendToTab(state.tabId, { type: "MEETING_DEBRIEF", debrief });
+  resetStateAfterStop();
+}
+
+async function ensureActiveMeeting(defaultTitle) {
+  const active = await safeJsonFetch(`${state.apiBaseUrl}/api/meetings/active`);
+  if (active && active.id) {
+    return active;
+  }
+
+  return safeJsonFetch(`${state.apiBaseUrl}/api/meetings/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: sanitizeMeetingTitle(defaultTitle),
+      participant_count: 2,
+    }),
+  });
+}
+
+async function endMeeting(meetingId) {
+  try {
+    await fetch(`${state.apiBaseUrl}/api/meetings/${meetingId}/end`, { method: "POST" });
+  } catch (_err) {
+    // Do not block local debrief creation if API call fails.
+  }
+}
+
+async function safeJsonFetch(url, init) {
+  try {
+    const response = await fetch(url, init);
+    if (!response.ok) {
+      return null;
+    }
+    return await response.json();
+  } catch (_err) {
+    return null;
+  }
+}
+
+function sanitizeMeetingTitle(raw) {
+  return String(raw || "Meeting")
+    .replace(/\s*[-|]\s*(Google Meet|Zoom|Microsoft Teams)\s*$/i, "")
+    .trim()
+    .slice(0, 120) || "Meeting";
+}
+
+function normalizeWsBase(value) {
+  const cleaned = String(value || DEFAULT_WS_BASE_URL).trim();
+  return cleaned
+    .replace(/\/$/, "")
+    .replace(/\/transcribe$/i, "")
+    .replace(/\/ws\/audio\/?$/i, "");
+}
+
+function normalizeHttpBase(value) {
+  return String(value || DEFAULT_API_BASE_URL).trim().replace(/\/$/, "");
+}
+
+function processTranscriptLine(text) {
+  const clean = (text || "").trim();
+  if (!clean) {
+    return;
+  }
+
+  const ts = new Date().toISOString();
+  state.transcript.push({ text: clean, timestamp: ts });
+
+  updateRollingSummary();
+  upsertActionItems(clean, ts);
+  updateDebtLog(clean);
+  updateNotes(clean);
+
+  broadcastLiveUpdate(clean);
+}
+
+function startDialogueSimulation() {
+  stopDialogueSimulation();
+  state.dialogueIndex = 0;
+
+  const emitNext = () => {
+    if (!state.active) {
+      return;
+    }
+
+    const line = DEMO_DIALOGUE_LINES[state.dialogueIndex % DEMO_DIALOGUE_LINES.length];
+    state.dialogueIndex += 1;
+    processTranscriptLine(line);
+
+    const delayMs = randomBetween(5000, 7000);
+    state.dialogueTimer = setTimeout(emitNext, delayMs);
+  };
+
+  // Kick off quickly so user sees immediate transcript updates.
+  state.dialogueTimer = setTimeout(emitNext, 1500);
+}
+
+function stopDialogueSimulation() {
+  if (state.dialogueTimer) {
+    clearTimeout(state.dialogueTimer);
+    state.dialogueTimer = null;
+  }
+}
+
+function updateNotes(latestLine) {
+  const note = buildNoteFromLine(latestLine);
+  if (!note) {
+    return;
+  }
+
+  state.notes.unshift({
+    id: crypto.randomUUID(),
+    text: note,
+    createdAt: new Date().toISOString(),
+  });
+
+  if (state.notes.length > 12) {
+    state.notes = state.notes.slice(0, 12);
+  }
+}
+
+function buildNoteFromLine(line) {
+  if (/\bdecision|approved|finalized|agreed\b/i.test(line)) {
+    return `Decision: ${line.replace(/^\w+\s*:\s*/, "")}`;
+  }
+  if (/\baction item|next step|please|need to|follow up\b/i.test(line)) {
+    return `Action note: ${line.replace(/^\w+\s*:\s*/, "")}`;
+  }
+  if (/\bopen question|pending|blocker|unresolved\b/i.test(line)) {
+    return `Risk note: ${line.replace(/^\w+\s*:\s*/, "")}`;
+  }
+  return `Context note: ${line.replace(/^\w+\s*:\s*/, "")}`;
+}
+
+function randomBetween(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function updateRollingSummary() {
+  const recent = state.transcript.slice(-8).map((t) => t.text);
+  if (recent.length === 0) {
+    state.rollingSummary = "";
+    return;
+  }
+
+  const stitched = recent.join(" ");
+  const parts = stitched
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean)
+    .slice(-3);
+
+  state.rollingSummary = parts.join(" ");
+}
+
+function upsertActionItems(line, timestamp) {
+  const normalized = line.toLowerCase();
+  const createTrigger =
+    /\b(action item|todo|follow up|next step|please|need to|should|will)\b/i.test(line);
+
+  if (createTrigger) {
+    const assignee = extractAssignee(line);
+    const due = extractDuePhrase(line);
+    const title = cleanActionTitle(line);
+
+    const existing = state.actions.find(
+      (item) => item.status !== "done" && similarity(item.title, title) > 0.75
+    );
+
+    if (!existing) {
+      state.actions.unshift({
+        id: crypto.randomUUID(),
+        title,
+        assignee,
+        due,
+        status: "open",
+        createdAt: timestamp,
+        completedAt: null,
+      });
+    }
+  }
+
+  const doneTrigger = /\b(done|completed|resolved|finished|closed)\b/i.test(normalized);
+  if (!doneTrigger) {
+    return;
+  }
+
+  for (const action of state.actions) {
+    if (action.status === "done") {
+      continue;
+    }
+
+    const score = similarity(action.title, line);
+    const nameMatch = action.assignee && normalized.includes(action.assignee.toLowerCase());
+    if (score > 0.45 || nameMatch) {
+      action.status = "done";
+      action.completedAt = timestamp;
+      break;
+    }
+  }
+}
+
+function extractAssignee(line) {
+  const byName = line.match(/(?:for|to|by|assign(?:ed)? to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/);
+  if (byName) {
+    return byName[1];
+  }
+
+  const atMention = line.match(/@([A-Za-z][A-Za-z0-9_-]+)/);
+  if (atMention) {
+    return atMention[1];
+  }
+
+  return "Unassigned";
+}
+
+function extractDuePhrase(line) {
+  const dueMatch = line.match(/\b(?:by|before|on)\s+([A-Za-z0-9,\-\s]{3,30})/i);
+  return dueMatch ? dueMatch[1].trim() : "";
+}
+
+function cleanActionTitle(line) {
+  return line
+    .replace(/^(action item|todo|follow up|next step)\s*:?\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 220);
+}
+
+function updateDebtLog(line) {
+  const blockerMatch = line.match(/\b(blocker|open question|pending|stuck|unresolved)\b[:\-\s]*(.+)?/i);
+  if (!blockerMatch) {
+    return;
+  }
+
+  const topic = (blockerMatch[2] || line).toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
+  if (!topic) {
+    return;
+  }
+
+  const key = topic.split(/\s+/).slice(0, 8).join(" ");
+  if (!state.debtLog[key]) {
+    state.debtLog[key] = { count: 0, lastSeen: null, resolved: false };
+  }
+
+  state.debtLog[key].count += 1;
+  state.debtLog[key].lastSeen = new Date().toISOString();
+}
+
+function broadcastLiveUpdate(latestLine) {
+  sendToTab(state.tabId, {
+    type: "LIVE_UPDATE",
+    payload: {
+      active: state.active,
+      latestLine: latestLine || "",
+      transcriptLines: state.transcript.slice(-12),
+      rollingSummary: state.rollingSummary,
+      notes: state.notes.slice(0, 8),
+      actions: state.actions.slice(0, 20),
+      screenshots: state.screenshots.slice(-8),
+      transcriptCount: state.transcript.length,
+    },
+  });
+}
+
+function sendToTab(tabId, message) {
+  if (!tabId) {
+    return;
+  }
+  chrome.tabs.sendMessage(tabId, message).catch(() => {});
+}
+
+function startScreenshotMonitor() {
+  clearScreenshotMonitor();
+  state.screenshotTimer = setInterval(captureSignificantVisual, SCREENSHOT_INTERVAL_MS);
+}
+
+function clearScreenshotMonitor() {
+  if (state.screenshotTimer) {
+    clearInterval(state.screenshotTimer);
+    state.screenshotTimer = null;
+  }
+}
+
+async function captureSignificantVisual() {
+  if (!state.active) {
+    return;
+  }
+
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(state.windowId, { format: "jpeg", quality: 55 });
+    const hash = await hashImageData(dataUrl);
+
+    if (state.lastVisualHash !== null) {
+      const diff = Math.abs(hash - state.lastVisualHash) / 255;
+      if (diff < SIGNIFICANT_VISUAL_DIFF) {
+        return;
+      }
+    }
+
+    state.lastVisualHash = hash;
+
+    state.screenshots.push({
+      id: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      dataUrl,
+    });
+
+    if (state.screenshots.length > 30) {
+      state.screenshots.shift();
+    }
+
+    broadcastLiveUpdate();
+  } catch (_err) {
+    // Ignore occasional screenshot failures on navigation switches.
+  }
+}
+
+function hashImageData(dataUrl) {
+  return fetch(dataUrl)
+    .then((res) => res.blob())
+    .then((blob) => createImageBitmap(blob))
+    .then((bitmap) => {
+      const canvas = new OffscreenCanvas(16, 16);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx) {
+        throw new Error("2D context unavailable");
+      }
+
+      ctx.drawImage(bitmap, 0, 0, 16, 16);
+      bitmap.close();
+
+      const pixels = ctx.getImageData(0, 0, 16, 16).data;
+      let sum = 0;
+
+      for (let i = 0; i < pixels.length; i += 4) {
+        sum += Math.round((pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3);
+      }
+
+      return Math.round(sum / 256);
+    });
+}
+
+async function createDebrief() {
+  const endedAt = new Date().toISOString();
+  const decisions = extractDecisionLines();
+  const openQuestions = extractOpenQuestions();
+
+  return {
+    id: crypto.randomUUID(),
+    startedAt: state.startedAt,
+    endedAt,
+    rollingSummary: state.rollingSummary,
+    decisions,
+    openQuestions,
+    actionItems: state.actions,
+    screenshotGallery: state.screenshots,
+    transcript: state.transcript,
+    personalizedDigest: buildPersonalDigest(state.actions),
+    followups: extractFollowupMentions(),
+  };
+}
+
+function extractDecisionLines() {
+  return state.transcript
+    .filter((t) => /\b(decided|decision|agreed|finalized|approved)\b/i.test(t.text))
+    .slice(-12);
+}
+
+function extractOpenQuestions() {
+  return state.transcript
+    .filter((t) => /\?|\b(open question|unclear|not sure|pending)\b/i.test(t.text))
+    .slice(-15);
+}
+
+function extractFollowupMentions() {
+  return state.transcript
+    .filter((t) => /\b(schedule|follow-up meeting|next meeting|sync again|calendar invite)\b/i.test(t.text))
+    .slice(-10);
+}
+
+function buildPersonalDigest(actions) {
+  const digest = {};
+  for (const action of actions) {
+    const owner = action.assignee || "Unassigned";
+    if (!digest[owner]) {
+      digest[owner] = [];
+    }
+    digest[owner].push(action);
+  }
+  return digest;
+}
+
+async function persistDebrief(debrief) {
+  const existing = await chrome.storage.local.get(["meetingHistory"]);
+  const history = existing.meetingHistory || [];
+  history.unshift(debrief);
+
+  const trimmed = history.slice(0, 25);
+  await chrome.storage.local.set({
+    meetingHistory: trimmed,
+    lastDebrief: debrief,
+  });
+}
+
+async function mergeDebtLogIntoStorage() {
+  const existing = await chrome.storage.local.get(["debtLog"]);
+  const persisted = existing.debtLog || {};
+
+  for (const [topic, meta] of Object.entries(state.debtLog)) {
+    if (!persisted[topic]) {
+      persisted[topic] = { count: 0, lastSeen: null, resolved: false };
+    }
+
+    persisted[topic].count += meta.count;
+    persisted[topic].lastSeen = meta.lastSeen;
+  }
+
+  await chrome.storage.local.set({ debtLog: persisted });
+}
+
+async function exportLastDebrief() {
+  const { lastDebrief } = await chrome.storage.local.get(["lastDebrief"]);
+  if (!lastDebrief) {
+    return { ok: false, error: "No debrief available yet." };
+  }
+
+  const blob = new Blob([JSON.stringify(lastDebrief, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+
+  await chrome.downloads.download({
+    url,
+    filename: `meeting-debrief-${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+    saveAs: true,
+  });
+
+  URL.revokeObjectURL(url);
+  return { ok: true };
+}
+
+function getPublicMeetingState() {
+  return {
+    active: state.active,
+    meetingId: state.meetingId,
+    startedAt: state.startedAt,
+    transcriptCount: state.transcript.length,
+    openActions: state.actions.filter((a) => a.status !== "done").length,
+    doneActions: state.actions.filter((a) => a.status === "done").length,
+    screenshotCount: state.screenshots.length,
+  };
+}
+
+function resetStateForNewMeeting(tabId, windowId) {
+  state.active = false;
+  state.tabId = tabId;
+  state.windowId = windowId;
+  state.meetingId = null;
+  state.startedAt = new Date().toISOString();
+  state.transcript = [];
+  state.rollingSummary = "";
+  state.actions = [];
+  state.notes = [];
+  state.screenshots = [];
+  state.debtLog = {};
+  stopDialogueSimulation();
+  state.lastVisualHash = null;
+}
+
+function resetStateAfterStop() {
+  state.active = false;
+  state.tabId = null;
+  state.windowId = null;
+  state.meetingId = null;
+  state.startedAt = null;
+  state.transcript = [];
+  state.rollingSummary = "";
+  state.actions = [];
+  state.notes = [];
+  state.screenshots = [];
+  state.debtLog = {};
+  stopDialogueSimulation();
+  state.lastVisualHash = null;
+}
+
+function isCallTab(url) {
+  if (!url) {
+    return false;
+  }
+  return CALL_URL_PATTERNS.some((re) => re.test(url));
+}
+
+async function ensureOffscreenDocument() {
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+    documentUrls: [chrome.runtime.getURL(OFFSCREEN_URL)],
+  });
+
+  if (contexts.length > 0) {
+    return;
+  }
+
+  await chrome.offscreen.createDocument({
+    url: OFFSCREEN_URL,
+    reasons: ["USER_MEDIA"],
+    justification: "Capture and stream call audio for live intelligence",
+  });
+}
+
+function sendToRuntime(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
+}
+
+function similarity(a, b) {
+  const left = normalizeForSimilarity(a);
+  const right = normalizeForSimilarity(b);
+  if (!left || !right) {
+    return 0;
+  }
+
+  if (left === right) {
+    return 1;
+  }
+
+  const leftWords = new Set(left.split(" "));
+  const rightWords = new Set(right.split(" "));
+
+  let common = 0;
+  for (const word of leftWords) {
+    if (rightWords.has(word)) {
+      common += 1;
+    }
+  }
+
+  return common / Math.max(leftWords.size, rightWords.size);
+}
+
+function normalizeForSimilarity(value) {
+  return (value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}

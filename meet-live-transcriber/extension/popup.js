@@ -1,71 +1,138 @@
-/**
- * popup.js — Popup UI logic
- *
- * Sends START_TRANSCRIBE / STOP_TRANSCRIBE messages to the background
- * service worker, which then handles tabCapture + offscreen orchestration.
- */
+const startBtn = document.getElementById("startBtn");
+const stopBtn = document.getElementById("stopBtn");
+const exportBtn = document.getElementById("exportBtn");
+const clearDebtBtn = document.getElementById("clearDebtBtn");
+const saveWsBtn = document.getElementById("saveWsBtn");
+const wsInput = document.getElementById("wsInput");
+const statusEl = document.getElementById("status");
+const statsEl = document.getElementById("stats");
 
-const startBtn   = document.getElementById("startBtn");
-const stopBtn    = document.getElementById("stopBtn");
-const statusEl   = document.getElementById("status");
-const indicator  = document.getElementById("indicator");
+bootstrap();
 
-// Restore UI state from storage
-chrome.storage.session.get("transcribing", (result) => {
-  if (result.transcribing) setActiveUI();
-});
+async function bootstrap() {
+  const local = await chrome.storage.local.get(["transcribeWsUrl"]);
+  wsInput.value = local.transcribeWsUrl || "ws://localhost:8000/transcribe";
+
+  const session = await chrome.storage.session.get(["transcribing"]);
+  if (session.transcribing) {
+    setActiveUI();
+  }
+
+  await refreshStats();
+}
 
 startBtn.addEventListener("click", async () => {
-  // Ensure we're on a Google Meet tab
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.url?.startsWith("https://meet.google.com/")) {
-    statusEl.textContent = "⚠ Open a Google Meet tab first.";
-    statusEl.style.color = "#f28b82";
+
+  if (!tab || !tab.id) {
+    setStatus("No active tab found.", true);
     return;
   }
 
-  startBtn.disabled = true;
-  statusEl.textContent = "Starting capture…";
-  statusEl.style.color = "#9aa0a6";
-
-  chrome.runtime.sendMessage(
-    { type: "START_TRANSCRIBE", tabId: tab.id },
-    (response) => {
-      if (chrome.runtime.lastError) {
-        statusEl.textContent = "Error: " + chrome.runtime.lastError.message;
-        statusEl.style.color = "#f28b82";
-        startBtn.disabled = false;
-        return;
-      }
-      if (response?.ok) {
-        setActiveUI();
-      } else {
-        statusEl.textContent = "Error: " + (response?.error || "unknown");
-        statusEl.style.color = "#f28b82";
-        startBtn.disabled = false;
-      }
+  chrome.runtime.sendMessage({ type: "START_TRANSCRIBE", tabId: tab.id }, (response) => {
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, true);
+      return;
     }
-  );
+
+    if (!response || !response.ok) {
+      setStatus(response?.error || "Failed to start.", true);
+      return;
+    }
+
+    setActiveUI();
+    setStatus("Live intelligence started.");
+  });
 });
 
 stopBtn.addEventListener("click", () => {
-  chrome.runtime.sendMessage({ type: "STOP_TRANSCRIBE" });
-  setInactiveUI();
+  chrome.runtime.sendMessage({ type: "STOP_TRANSCRIBE" }, (response) => {
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, true);
+      return;
+    }
+
+    if (!response || !response.ok) {
+      setStatus(response?.error || "Failed to stop.", true);
+      return;
+    }
+
+    setInactiveUI();
+    setStatus("Stopped. Debrief generated.");
+  });
+});
+
+saveWsBtn.addEventListener("click", async () => {
+  const value = wsInput.value.trim();
+  if (!value.startsWith("ws://") && !value.startsWith("wss://")) {
+    setStatus("WebSocket URL must start with ws:// or wss://", true);
+    return;
+  }
+
+  await chrome.storage.local.set({ transcribeWsUrl: value });
+  setStatus("WebSocket endpoint saved.");
+});
+
+exportBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "EXPORT_LAST_DEBRIEF" }, (response) => {
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, true);
+      return;
+    }
+
+    if (!response || !response.ok) {
+      setStatus(response?.error || "Export failed.", true);
+      return;
+    }
+
+    setStatus("Debrief export started.");
+  });
+});
+
+clearDebtBtn.addEventListener("click", () => {
+  chrome.runtime.sendMessage({ type: "CLEAR_DEBT_LOG" }, (response) => {
+    if (chrome.runtime.lastError) {
+      setStatus(chrome.runtime.lastError.message, true);
+      return;
+    }
+
+    if (!response || !response.ok) {
+      setStatus(response?.error || "Could not clear debt log.", true);
+      return;
+    }
+
+    setStatus("Cross-meeting debt log cleared.");
+  });
+});
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === "STATUS_UPDATE") {
+    setStatus(message.text || "Status updated.");
+  }
+  refreshStats();
 });
 
 function setActiveUI() {
   startBtn.style.display = "none";
   stopBtn.style.display = "block";
-  indicator.classList.add("active");
-  statusEl.textContent = "Transcribing…";
-  statusEl.style.color = "#34a853";
 }
 
 function setInactiveUI() {
   startBtn.style.display = "block";
-  startBtn.disabled = false;
   stopBtn.style.display = "none";
-  indicator.classList.remove("active");
-  statusEl.textContent = "Stopped.";
-  statusEl.style.color = "#9aa0a6";
+}
+
+function setStatus(text, isError = false) {
+  statusEl.textContent = text;
+  statusEl.style.color = isError ? "#ffb3b3" : "#b9cdeb";
+}
+
+async function refreshStats() {
+  chrome.runtime.sendMessage({ type: "GET_MEETING_STATE" }, (state) => {
+    if (!state) {
+      return;
+    }
+
+    statsEl.textContent = `${state.transcriptCount || 0} lines • ${state.openActions || 0} open tasks • ${state.doneActions || 0} done tasks • ${state.screenshotCount || 0} visuals`;
+  });
 }

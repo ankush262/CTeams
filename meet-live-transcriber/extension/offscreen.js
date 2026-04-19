@@ -1,149 +1,119 @@
-/**
- * offscreen.js — Audio processing inside the Offscreen Document
- *
- * Flow:
- *  1. Receive START_CAPTURE message with a tabCapture streamId.
- *  2. Open the captured MediaStream via getUserMedia (chromeMediaSource: "tab").
- *  3. Create an AudioContext resampled to 16 kHz mono.
- *  4. Use a ScriptProcessorNode to extract raw Float32 PCM chunks.
- *  5. Stream those chunks via WebSocket to the FastAPI /transcribe endpoint.
- *  6. Forward transcribed text back to the background service worker.
- */
-
-const WS_URL = "ws://localhost:8100/transcribe";
-const TARGET_SAMPLE_RATE = 16_000;
+const TARGET_SAMPLE_RATE = 16000;
+const CHUNK_SIZE = 2048;
 
 let ws = null;
-let audioContext = null;
-let scriptProcessor = null;
+let wsUrl = "ws://localhost:8000/transcribe";
 let mediaStream = null;
+let audioContext = null;
+let sourceNode = null;
+let processorNode = null;
 
-// ── Message handler ───────────────────────────────────────────────────────────
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "START_CAPTURE") {
-    startCapture(message.streamId).catch((err) =>
-      console.error("[MeetTranscriber] Capture error:", err)
-    );
+    wsUrl = message.wsUrl || wsUrl;
+    startCapture(message.streamId)
+      .then(() => sendResponse({ ok: true }))
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
   }
+
   if (message.type === "STOP_CAPTURE") {
     stopCapture();
+    sendResponse({ ok: true });
+    return true;
   }
+
+  return false;
 });
 
-// ── Main capture + processing pipeline ───────────────────────────────────────
 async function startCapture(streamId) {
-  // Stop any previous session
   stopCapture();
+  sendStatus("Initializing tab audio capture...");
 
-  console.log("[MeetTranscriber] Starting capture with streamId:", streamId);
-
-  // 1. Get the tab MediaStream through getUserMedia with the captured stream ID
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        mandatory: {
-          chromeMediaSource: "tab",
-          chromeMediaSourceId: streamId,
-        },
+  mediaStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      mandatory: {
+        chromeMediaSource: "tab",
+        chromeMediaSourceId: streamId,
       },
-      video: false,
-    });
-  } catch (err) {
-    console.error("[MeetTranscriber] getUserMedia failed:", err);
-    return;
-  }
+    },
+    video: false,
+  });
 
-  mediaStream = stream;
-  console.log("[MeetTranscriber] Got media stream, tracks:", stream.getAudioTracks().length);
-
-  // 2. Open WebSocket to the backend
-  try {
-    ws = new WebSocket(WS_URL);
-  } catch (err) {
-    console.error("[MeetTranscriber] WebSocket construction failed:", err);
-    return;
-  }
+  ws = new WebSocket(wsUrl);
   ws.binaryType = "arraybuffer";
 
-  ws.onopen = () => {
-    console.log("[MeetTranscriber] WebSocket connected to", WS_URL);
-  };
+  ws.onopen = () => sendStatus(`Connected to ${wsUrl}`);
+  ws.onclose = () => sendStatus("Transcription socket closed.");
+  ws.onerror = () => sendStatus("Socket error. Check backend availability.");
 
-  ws.onerror = (e) => {
-    console.error("[MeetTranscriber] WebSocket error:", e);
-  };
-
-  ws.onclose = (e) => {
-    console.log("[MeetTranscriber] WebSocket closed (code=%d, reason=%s)", e.code, e.reason);
-  };
-
-  // 3. Forward transcription text to background → content script
   ws.onmessage = (event) => {
     if (typeof event.data === "string" && event.data.trim()) {
-      console.log("[MeetTranscriber] Received transcript:", event.data.trim());
-      chrome.runtime.sendMessage({ type: "TRANSCRIPTION", text: event.data });
+      chrome.runtime.sendMessage({
+        type: "TRANSCRIPTION",
+        text: event.data.trim(),
+      }).catch(() => {});
     }
   };
 
-  // 4. AudioContext at 16 kHz — browser resamples automatically
   audioContext = new AudioContext({ sampleRate: TARGET_SAMPLE_RATE });
-  const source = audioContext.createMediaStreamSource(stream);
+  sourceNode = audioContext.createMediaStreamSource(mediaStream);
+  processorNode = audioContext.createScriptProcessor(CHUNK_SIZE, 1, 1);
 
-  // 5. ScriptProcessorNode: bufferSize must be a power of 2 ≥ 256
-  //    1 input channel (mono), 1 output channel
-  scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
-
-  let chunkCount = 0;
-
-  scriptProcessor.onaudioprocess = (event) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-
-    const inputPCM = event.inputBuffer.getChannelData(0); // Float32Array
-
-    // Skip silent chunks to save bandwidth
-    let maxAbs = 0;
-    for (let i = 0; i < inputPCM.length; i++) {
-      const abs = Math.abs(inputPCM[i]);
-      if (abs > maxAbs) maxAbs = abs;
+  processorNode.onaudioprocess = (event) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return;
     }
-    if (maxAbs < 0.001) return; // silence threshold
 
-    // Copy to avoid sending a reference to a reused AudioBuffer
-    const copy = new Float32Array(inputPCM);
-    ws.send(copy.buffer);
-    chunkCount++;
-
-    if (chunkCount % 20 === 0) {
-      console.log("[MeetTranscriber] Sent %d audio chunks (peak: %f)", chunkCount, maxAbs);
-    }
+    const mono = event.inputBuffer.getChannelData(0);
+    const packet = new Float32Array(mono.length);
+    packet.set(mono);
+    ws.send(packet.buffer);
   };
 
-  // Connect: source → processor → destination (silent output required to keep
-  // the AudioContext graph alive)
-  source.connect(scriptProcessor);
-  scriptProcessor.connect(audioContext.destination);
+  sourceNode.connect(processorNode);
+  processorNode.connect(audioContext.destination);
 
-  console.log("[MeetTranscriber] Audio pipeline started @ %d Hz", TARGET_SAMPLE_RATE);
+  sendStatus("Streaming live audio at 16kHz mono.");
 }
 
-// ── Cleanup ───────────────────────────────────────────────────────────────────
 function stopCapture() {
-  if (scriptProcessor) {
-    try { scriptProcessor.disconnect(); } catch (e) { /* ignore */ }
-    scriptProcessor = null;
+  if (processorNode) {
+    try {
+      processorNode.disconnect();
+    } catch (_err) {}
+    processorNode = null;
   }
+
+  if (sourceNode) {
+    try {
+      sourceNode.disconnect();
+    } catch (_err) {}
+    sourceNode = null;
+  }
+
   if (audioContext) {
-    try { audioContext.close(); } catch (e) { /* ignore */ }
+    try {
+      audioContext.close();
+    } catch (_err) {}
     audioContext = null;
   }
+
   if (mediaStream) {
-    mediaStream.getTracks().forEach((t) => t.stop());
+    mediaStream.getTracks().forEach((track) => track.stop());
     mediaStream = null;
   }
+
   if (ws) {
-    try { ws.close(); } catch (e) { /* ignore */ }
+    try {
+      ws.close();
+    } catch (_err) {}
     ws = null;
   }
-  console.log("[MeetTranscriber] Capture stopped & cleaned up");
+
+  sendStatus("Capture stopped.");
+}
+
+function sendStatus(text) {
+  chrome.runtime.sendMessage({ type: "STATUS_UPDATE", text }).catch(() => {});
 }

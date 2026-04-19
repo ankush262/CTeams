@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.endpoints import meetings, transcript, debrief, websocket, actions, audio, integrations
+from app.api.endpoints import meetings, transcript, debrief, websocket, actions, audio
 from app.api.endpoints.meetings import router as meetings_router
 from app.api.endpoints.transcript import router as transcript_router
 from app.core.config import settings
@@ -47,7 +47,6 @@ app.include_router(transcript.router, prefix="/api/transcript", tags=["Transcrip
 app.include_router(debrief.router, prefix="/api/debrief", tags=["Debrief"])
 app.include_router(actions.router, prefix="/api/actions", tags=["Actions"])
 app.include_router(audio.router, prefix="/api/audio", tags=["Audio"])
-app.include_router(integrations.router, prefix="/api/integrations", tags=["Integrations"])
 app.include_router(websocket.router, tags=["WebSocket"])
 
 

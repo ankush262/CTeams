@@ -40,11 +40,16 @@ GEMINI_MODEL = settings.GEMINI_MODEL
 SAMPLE_RATE = 16000
 
 # Only dedicated Live models support bidiGenerateContent.
-# Native audio models require AUDIO response modality.
 # Use input_audio_transcription to get text transcripts of spoken audio.
+# TEXT response modality avoids unnecessary audio generation overhead.
 LIVE_CONFIG = types.LiveConnectConfig(
-    response_modalities=["AUDIO"],
+    response_modalities=["TEXT"],
     input_audio_transcription=types.AudioTranscriptionConfig(),
+    system_instruction=(
+        "You are a real-time meeting transcription assistant. "
+        "Listen to the audio and provide transcription. "
+        "Output the transcribed text exactly as spoken."
+    ),
 )
 
 # ── Whisper fallback (used by HTTP /chunk endpoint) ──────────────────────────
@@ -215,7 +220,6 @@ async def _background_refine(meeting_id: str, text: str, raw_chunk, start_ms: in
         print(f"[audio] Speaker diarization error: {exc}")
 
     asyncio.create_task(groq_service.extract_action_items(meeting_id, text))
-    asyncio.create_task(groq_service.detect_and_schedule_event_from_chunk(meeting_id, text))
 
     if chunk_count % 5 == 0:
         asyncio.create_task(groq_service.summarize_transcript(meeting_id))
@@ -260,13 +264,32 @@ async def live_audio_ws(websocket: WebSocket, meeting_id: str):
                     async for msg in session.receive():
                         text = None
                         sc = getattr(msg, "server_content", None)
-                        # input_audio_transcription → text transcript of spoken input
-                        if sc and getattr(sc, "input_transcription", None):
-                            text = getattr(sc.input_transcription, "text", None)
+
+                        if sc:
+                            # 1) input_audio_transcription → transcript of spoken input
+                            it = getattr(sc, "input_transcription", None)
+                            if it:
+                                text = getattr(it, "text", None)
+
+                            # 2) model_turn with text parts (TEXT modality response)
+                            if not text:
+                                mt = getattr(sc, "model_turn", None)
+                                if mt and getattr(mt, "parts", None):
+                                    text = "".join(
+                                        p.text for p in mt.parts
+                                        if getattr(p, "text", None)
+                                    )
+
+                        # 3) Shortcut .text property (newer SDK)
+                        if not text and getattr(msg, "text", None):
+                            text = msg.text
 
                         if text and text.strip() and len(text.strip()) >= 2:
                             clean = text.strip()
+                            if _is_hallucination(clean):
+                                continue
                             elapsed_ms = int((time.time() - capture_start) * 1000)
+                            print(f"[audio-ws] Transcript: {clean}")
 
                             # Persist + broadcast in background so recv stays fast
                             asyncio.create_task(

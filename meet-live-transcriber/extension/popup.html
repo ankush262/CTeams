@@ -2,85 +2,78 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Meet Live Transcriber</title>
+    <title>Meeting Intelligence</title>
     <style>
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      * { box-sizing: border-box; }
       body {
-        width: 280px;
-        padding: 20px;
-        font-family: "Google Sans", Roboto, sans-serif;
-        font-size: 14px;
-        background: #202124;
-        color: #e8eaed;
+        margin: 0;
+        width: 330px;
+        padding: 16px;
+        font-family: "Segoe UI", "Trebuchet MS", sans-serif;
+        background: radial-gradient(circle at top right, #173349 0%, #0f1c2a 70%);
+        color: #eef5ff;
       }
-      h3 {
+      h1 {
+        margin: 0 0 8px;
         font-size: 16px;
-        margin-bottom: 10px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-      }
-      h3 .dot {
-        width: 8px; height: 8px;
-        border-radius: 50%;
-        background: #5f6368;
-        display: inline-block;
-      }
-      h3 .dot.active { background: #34a853; animation: pulse 1.5s infinite; }
-      @keyframes pulse {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
+        letter-spacing: 0.2px;
       }
       p {
-        margin: 0 0 14px;
+        margin: 0 0 12px;
+        color: #bed3ee;
         font-size: 12px;
-        color: #9aa0a6;
         line-height: 1.4;
       }
-      button {
+      .stack { display: grid; gap: 8px; }
+      input, button {
         width: 100%;
-        padding: 10px;
-        border: none;
         border-radius: 8px;
-        font-size: 14px;
-        font-weight: 500;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        font-size: 12px;
+      }
+      input {
+        background: rgba(255, 255, 255, 0.08);
+        color: #ffffff;
+        padding: 9px 10px;
+      }
+      button {
+        padding: 10px;
         cursor: pointer;
-        transition: background 0.2s;
+        color: #0c1a27;
+        font-weight: 700;
       }
-      #startBtn {
-        background: #8ab4f8;
-        color: #202124;
-      }
-      #startBtn:hover { background: #aecbfa; }
-      #startBtn:disabled {
-        background: #5f6368;
-        color: #9aa0a6;
-        cursor: not-allowed;
-      }
-      #stopBtn {
-        display: none;
-        background: #f28b82;
-        color: #202124;
-        margin-top: 8px;
-      }
-      #stopBtn:hover { background: #fba9a3; }
+      #startBtn { background: #8de6af; }
+      #stopBtn { background: #ffd08d; display: none; }
+      #exportBtn { background: #a7d8ff; }
+      #clearDebtBtn { background: #ffc7c7; }
+      #saveWsBtn { background: #d4c8ff; }
       #status {
-        margin-top: 12px;
+        margin-top: 10px;
+        font-size: 12px;
+        color: #b9cdeb;
+      }
+      #stats {
+        margin-top: 8px;
         font-size: 11px;
-        color: #9aa0a6;
-        text-align: center;
+        color: #93afcf;
       }
     </style>
   </head>
   <body>
-    <h3><span class="dot" id="indicator"></span> Meet Live Transcriber</h3>
-    <p>
-      Click <strong>Start Transcribing</strong> while on a Google Meet tab to
-      capture and transcribe audio in real time.
-    </p>
-    <button id="startBtn">▶ Start Transcribing</button>
-    <button id="stopBtn">■ Stop Transcribing</button>
-    <div id="status"></div>
+    <h1>Meeting Intelligence</h1>
+    <p>Run on Meet, Zoom, or Teams. Live transcript, summary, action tracking, and visual timeline are generated automatically.</p>
+
+    <div class="stack">
+      <input id="wsInput" placeholder="ws://localhost:8000/transcribe" />
+      <button id="saveWsBtn">Save WebSocket Endpoint</button>
+      <button id="startBtn">Start Intelligence</button>
+      <button id="stopBtn">Stop Intelligence</button>
+      <button id="exportBtn">Export Last Debrief JSON</button>
+      <button id="clearDebtBtn">Clear Cross-Meeting Debt Log</button>
+    </div>
+
+    <div id="status">Idle.</div>
+    <div id="stats">0 lines • 0 open tasks • 0 done tasks • 0 visuals</div>
 
     <script src="popup.js"></script>
   </body>

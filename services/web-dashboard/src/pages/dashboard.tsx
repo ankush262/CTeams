@@ -3,7 +3,6 @@ import { useRouter } from 'next/router';
 import { Plus } from 'lucide-react';
 import Layout from '../components/layout/Layout';
 import MeetingCard from '../components/cards/MeetingCard';
-import UpcomingMeetings from '../components/cards/UpcomingMeetings';
 import { startMeeting, listMeetings, type Meeting } from '../services/api';
 import toast from 'react-hot-toast';
 
@@ -44,11 +43,6 @@ export default function Dashboard() {
   return (
     <Layout>
       <div className="max-w-4xl mx-auto">
-        {/* Upcoming Meetings / Calendar Sync */}
-        <div className="mb-8">
-          <UpcomingMeetings />
-        </div>
-
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-white">Meetings</h1>

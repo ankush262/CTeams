@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     STT_MODEL: str = "whisper-large-v3-turbo"
 
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+    GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-latest"
 
     # Dev default allows dashboard and Chrome extension requests (including null/chrome-extension origins).
     # Lock this down in production to the dashboard URL and your specific chrome-extension://<extension-id> origin.
@@ -33,12 +33,6 @@ class Settings(BaseSettings):
     AUDIO_SAMPLE_RATE: int = 16000
     AUDIO_CHUNK_DURATION_MS: int = 100
 
-    GOOGLE_CLIENT_ID: str = ""
-    GOOGLE_CLIENT_SECRET: str = ""
-    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/integrations/google/callback"
-    GOOGLE_OAUTH_SCOPES: List[str] = [
-        "https://www.googleapis.com/auth/calendar",
-    ]
     APP_FRONTEND_URL: str = "http://localhost:3000"
 
     model_config = SettingsConfigDict(

@@ -9,7 +9,6 @@ from app.core.config import settings
 from app.models.action_item import ActionItem
 from app.models.meeting import Meeting
 from app.models.transcript import TranscriptChunk
-from app.services import google_calendar_service
 from app.services.ws_manager import manager
 
 client = Groq(api_key=settings.GROQ_API_KEY)
@@ -18,7 +17,6 @@ client = Groq(api_key=settings.GROQ_API_KEY)
 # Keeps recent transcript context so the LLM can maintain consistent speaker
 # labels across chunks within the same meeting.
 _speaker_context: dict[str, List[dict]] = {}  # meeting_id → [{speaker, text}]
-_scheduled_signatures: dict[str, set[str]] = {}  # meeting_id -> unique signatures
 
 
 async def _get_meeting_doc(meeting_id: str) -> Optional[Meeting]:
@@ -167,121 +165,6 @@ async def identify_speakers(meeting_id: str, new_text: str) -> List[dict]:
 def clear_speaker_context(meeting_id: str):
     """Clear speaker context when a meeting ends."""
     _speaker_context.pop(meeting_id, None)
-    _scheduled_signatures.pop(meeting_id, None)
-
-
-def _might_contain_schedule_intent(text: str) -> bool:
-    """Fast keyword gate to avoid LLM calls for non-scheduling chunks."""
-    lowered = (text or "").lower()
-    keywords = [
-        "schedule",
-        "calendar",
-        "follow up",
-        "follow-up",
-        "meeting tomorrow",
-        "next week",
-        "book time",
-        "set up a meeting",
-        "invite",
-    ]
-    return any(k in lowered for k in keywords)
-
-
-async def detect_and_schedule_event_from_chunk(meeting_id: str, chunk_text: str) -> None:
-    """Auto-create Google Calendar event when transcript clearly requests scheduling."""
-    if not _might_contain_schedule_intent(chunk_text):
-        return
-
-    integration = await google_calendar_service.get_integration(user_id="default")
-    if not integration or not integration.auto_schedule_enabled:
-        return
-
-    meeting = await _get_meeting_doc(meeting_id)
-    if not meeting:
-        return
-
-    try:
-        now_utc = datetime.now(timezone.utc)
-        response = client.chat.completions.create(
-            model=settings.GROQ_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You extract scheduling intent from meeting transcript chunks. "
-                        "Return ONLY JSON with this schema:\n"
-                        "{\n"
-                        '  "should_schedule": true or false,\n'
-                        '  "confidence": 0.0 to 1.0,\n'
-                        '  "title": "event title",\n'
-                        '  "reason": "short explanation",\n'
-                        '  "start_iso_utc": "ISO datetime in UTC",\n'
-                        '  "end_iso_utc": "ISO datetime in UTC"\n'
-                        "}\n"
-                        "Use current UTC time as reference: "
-                        f"{now_utc.isoformat()}\n"
-                        "If no clear scheduling intent exists, set should_schedule false."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": (
-                        f"Meeting title: {meeting.title}\n"
-                        f"Transcript chunk: {chunk_text}"
-                    ),
-                },
-            ],
-            max_tokens=250,
-            temperature=0.1,
-        )
-
-        result = _parse_response_json(response)
-        if not result.get("should_schedule"):
-            return
-        if float(result.get("confidence", 0.0)) < 0.75:
-            return
-
-        title = (result.get("title") or f"Follow-up: {meeting.title}").strip()
-        start_iso = result.get("start_iso_utc")
-        end_iso = result.get("end_iso_utc")
-        if not start_iso or not end_iso:
-            return
-
-        start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-        end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-        if end_dt <= start_dt:
-            end_dt = start_dt + timedelta(minutes=30)
-
-        signature = f"{title.lower()}::{start_dt.isoformat()}"
-        if meeting_id not in _scheduled_signatures:
-            _scheduled_signatures[meeting_id] = set()
-        if signature in _scheduled_signatures[meeting_id]:
-            return
-
-        created = await google_calendar_service.create_calendar_event(
-            title=title,
-            start_time=start_dt,
-            end_time=end_dt,
-            description=(
-                "Auto-scheduled by MeetMind based on meeting instruction.\n\n"
-                f"Chunk: {chunk_text}"
-            ),
-            user_id="default",
-        )
-        _scheduled_signatures[meeting_id].add(signature)
-
-        await manager.broadcast(
-            meeting_id,
-            {
-                "type": "google_event_scheduled",
-                "title": title,
-                "start": start_dt.isoformat(),
-                "event_id": created.get("id"),
-                "html_link": created.get("htmlLink"),
-            },
-        )
-    except Exception as exc:
-        print(f"detect_and_schedule_event_from_chunk error for meeting {meeting_id}: {exc}")
 
 
 async def summarize_transcript(meeting_id: str) -> Optional[dict]:
@@ -604,6 +487,5 @@ async def process_transcript_batch(meeting_id: str) -> None:
         )
         if latest_chunk and latest_chunk.text:
             await extract_action_items(meeting_id, latest_chunk.text)
-            await detect_and_schedule_event_from_chunk(meeting_id, latest_chunk.text)
     except Exception as exc:
         print(f"process_transcript_batch error for meeting {meeting_id}: {exc}")
