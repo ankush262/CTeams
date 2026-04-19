@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 
 from beanie import init_beanie
@@ -5,41 +6,47 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from app.core.config import settings
 
-# Module-level MongoDB client connection
+# Module-level MongoDB client connection.
 client: Optional[AsyncIOMotorClient] = None
 
-# Using a single module-level client instead of creating a new connection per request
-# ensures we reuse the same connection pool across all requests, which:
-#   1. Improves performance - connection pooling avoids the overhead of creating new connections
-#   2. Provides better resource management - the pool exhausts gracefully under load
-#   3. Maintains state - sessions and transactions work correctly
-# This pattern is standard in async database applications.
+# One shared client reuses Motor's connection pool, which is faster and more resource-efficient
+# than opening a brand new MongoDB connection for every request.
 
 
 async def init_db() -> None:
-    """Initialize the MongoDB connection and Beanie ODM.
-    
-    Called during application startup (via lifespan context manager).
-    Sets up the async motor client and initializes Beanie's document registry.
-    """
+    """Initialize MongoDB and register Beanie document models."""
     global client
-    
-    client = AsyncIOMotorClient(settings.MONGO_URL)
-    
-    # Get the database instance
+
+    from app.models.action_item import ActionItem
+    from app.models.google_integration import GoogleIntegration
+    from app.models.meeting import Meeting
+    from app.models.transcript import Transcript
+
+    mongo_uri = os.getenv("MONGO_URI") or settings.MONGO_URI
+    if not mongo_uri:
+        raise RuntimeError("MONGO_URI is not set. Add MONGO_URI to your environment or .env file.")
+
+    if not mongo_uri.startswith(("mongodb://", "mongodb+srv://")):
+        raise RuntimeError("Invalid MONGO_URI. Expected a mongodb:// or mongodb+srv:// connection string.")
+
+    try:
+        client = AsyncIOMotorClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        # Fail fast on startup if credentials/URI are invalid or cluster is unreachable.
+        await client.admin.command("ping")
+    except Exception as exc:
+        raise RuntimeError(f"Failed to initialize MongoDB client from MONGO_URI: {exc}") from exc
+
     db = client[settings.MONGO_DB_NAME]
-    
-    # Initialize Beanie with the database
-    # Document models will be registered here as they're created
-    await init_beanie(database=db, document_models=[])
+
+    await init_beanie(
+        database=db,
+        document_models=[Meeting, Transcript, ActionItem, GoogleIntegration],
+    )
 
 
 async def get_db() -> AsyncIOMotorDatabase:
-    """Return the MongoDB database instance for use in FastAPI endpoints.
-    
-    This function can be used with FastAPI's Depends() for dependency injection.
-    
-    Returns:
-        The AsyncIOMotorDatabase instance for querying collections
-    """
+    """FastAPI dependency that returns the active MongoDB database."""
+    if client is None:
+        raise RuntimeError("Database client is not initialized. Call init_db() at startup.")
+
     return client[settings.MONGO_DB_NAME]

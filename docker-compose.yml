@@ -1,22 +1,8 @@
-version: '3.8'
-
-# Docker Compose configuration for CTeams project
-# This file defines four services: MongoDB, Redis, Core API, and Web Dashboard
-# All services are connected via the cteams-network for inter-service communication
+# Docker Compose configuration for MeetMind
+# Defines three services: Redis, Core API, and Web Dashboard
+# All services are connected via meetmind-network for inter-service communication
 
 services:
-  # MongoDB service - NoSQL database for storing application data
-  mongo:
-    image: mongo:7
-    ports:
-      - "27017:27017"
-    volumes:
-      - ./data/mongo:/data/db
-    env_file:
-      - .env
-    networks:
-      - cteams-network
-
   # Redis service - In-memory data structure store for caching and session management
   redis:
     image: redis:7-alpine
@@ -25,9 +11,9 @@ services:
     volumes:
       - ./data/redis:/data
     networks:
-      - cteams-network
+      - meetmind-network
 
-  # Core API service - Backend API built with Python/FastAPI, handles business logic
+  # Core API service - FastAPI backend, handles business logic and WebSocket connections
   core-api:
     build: ./services/core-api
     ports:
@@ -37,12 +23,12 @@ services:
     volumes:
       - ./services/core-api:/app
     depends_on:
-      - mongo
-      - redis
+      redis:
+        condition: service_started
     networks:
-      - cteams-network
+      - meetmind-network
 
-  # Web Dashboard service - Frontend React/Vue dashboard for user interface
+  # Web Dashboard service - Next.js frontend dashboard
   web-dashboard:
     build: ./services/web-dashboard
     ports:
@@ -55,9 +41,9 @@ services:
     depends_on:
       - core-api
     networks:
-      - cteams-network
+      - meetmind-network
 
-# Custom network for all services to communicate with each other
+# Isolated network so services can reach each other by service name (e.g. mongo, redis).
 networks:
-  cteams-network:
+  meetmind-network:
     driver: bridge

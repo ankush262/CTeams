@@ -1,44 +1,52 @@
 from typing import List
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables or .env file."""
-
-    # App metadata
-    APP_NAME: str = "Cteams"
+    APP_NAME: str = "MeetMind"
     DEBUG: bool = True
 
-    # MongoDB configuration
-    MONGO_URL: str
-    MONGO_DB_NAME: str = "cteams"
+    MONGO_URI: str = ""
+    MONGO_DB_NAME: str = "meetmind"
 
-    # Redis configuration
     REDIS_URL: str
 
-    # Security and authentication
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
-    # Groq AI configuration
     GROQ_API_KEY: str
-    GROQ_MODEL: str = "llama3-8b-8192"
+    GROQ_MODEL: str = "llama-3.1-8b-instant"
 
-    # CORS allowed origins for frontend communication
-    ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]
+    ASSEMBLYAI_API_KEY: str = ""
 
-    class Config:
-        """Pydantic config to load environment variables from .env file."""
+    STT_MODEL: str = "whisper-large-v3-turbo"
 
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash-native-audio-preview-12-2025"
+
+    # Dev default allows dashboard and Chrome extension requests (including null/chrome-extension origins).
+    # Lock this down in production to the dashboard URL and your specific chrome-extension://<extension-id> origin.
+    ALLOWED_ORIGINS: List[str] = ["*"]
+
+    AUDIO_SAMPLE_RATE: int = 16000
+    AUDIO_CHUNK_DURATION_MS: int = 100
+
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/integrations/google/callback"
+    GOOGLE_OAUTH_SCOPES: List[str] = [
+        "https://www.googleapis.com/auth/calendar",
+    ]
+    APP_FRONTEND_URL: str = "http://localhost:3000"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
-# Module-level singleton instance of settings
-# Using a single shared instance throughout the app (rather than reading .env in every module)
-# ensures consistency, improves performance, and makes configuration testable.
-# This pattern is standard in FastAPI applications for centralized settings management.
+# One shared settings instance keeps config loading centralized and consistent across imports.
 settings = Settings()

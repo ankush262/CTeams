@@ -1,14 +1,57 @@
-fastapi==0.111.0  # Web framework for building APIs quickly with type hints and async support
-uvicorn[standard]==0.23.2  # ASGI server to run FastAPI applications efficiently
-motor==4.4.0  # Asynchronous MongoDB driver for non-blocking database operations
-beanie==1.24.0  # Async ODM for MongoDB built on top of Motor and Pydantic
-python-jose[cryptography]==3.3.0  # JWT creation/verification library for secure auth tokens
-passlib[bcrypt]==1.7.4  # Password hashing and verification using bcrypt for secure login
-python-multipart==0.0.6  # Handles multipart/form-data submissions (file uploads)
-groq==0.1.0  # Groq AI Python client library to call Groq model APIs
-chromadb==0.4.0  # Vector database for similarity search and embedding storage
-redis==4.9.0  # Redis client for sessions, caching, and pub/sub
-python-dotenv==1.0.0  # Load environment variables from .env files in development
-pydantic[email]==2.8.0  # Data validation and settings management with email-type helpers
-pydantic-settings==2.0.2  # Structured settings management for Pydantic-based config
-httpx==0.25.0  # Async HTTP client for external API calls from Python code
+# CRITICAL: motor + pymongo + beanie must stay at these versions — upgrading any one of them without checking compatibility will break the app.
+
+# FastAPI framework for building async APIs
+fastapi
+
+# ASGI server for running FastAPI with async/await support and optional performance features (uvloop, httptools)
+uvicorn[standard]
+
+# Motor 3.3.2 - async MongoDB driver (PINNED - do not upgrade without testing beanie and pymongo compatibility)
+motor==3.3.2
+
+# PyMongo 4.6.3 - synchronous MongoDB driver (PINNED - must match motor version compatibility)
+pymongo==4.6.3
+
+# Beanie 1.25.0 - async ODM for MongoDB (PINNED - must be compatible with motor==3.3.2)
+beanie==1.25.0
+
+# JWT authentication with cryptography support
+python-jose[cryptography]
+
+# Password hashing library with bcrypt support
+passlib[bcrypt]
+
+# Multipart form data parsing for file uploads and form submissions
+python-multipart
+
+# Groq API client for AI/LLM integration
+groq
+
+# ChromaDB - vector database for embeddings and semantic search
+chromadb
+
+# Redis client for caching and session management
+redis
+
+# Environment variable loader for configuration management
+python-dotenv
+
+# Data validation with email validation support
+pydantic[email]
+
+# Pydantic settings management for configuration
+pydantic-settings
+
+# Async HTTP client for making external API requests
+httpx
+
+# Google Calendar OAuth and API client
+google-auth
+google-auth-oauthlib
+google-api-python-client
+
+# Google Gemini API client for real-time transcription
+google-genai
+
+# Numpy for audio PCM conversion
+numpy

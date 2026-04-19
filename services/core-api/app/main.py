@@ -3,43 +3,59 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.endpoints import meetings, transcript, debrief, websocket, actions, audio, integrations
+from app.api.endpoints.meetings import router as meetings_router
+from app.api.endpoints.transcript import router as transcript_router
 from app.core.config import settings
 from app.db.session import init_db
 
 
+# Lifespan replaces the deprecated @app.on_event("startup") pattern. It runs setup code
+# before the app starts accepting requests and teardown code after the last request is served,
+# all within one clearly scoped async context manager.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # On app startup, initialize the database connections and models
+    print("MeetMind API starting")
     await init_db()
+    print("Database connected")
     yield
-    # No cleanup is required here; add teardown logic if needed later
+    print("MeetMind shutting down")
 
 
-# Create FastAPI application instance with project metadata
-app = FastAPI(title="Cteams API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title="MeetMind API",
+    description="AI-Powered Live Meeting Intelligence",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
-# CORS (Cross-Origin Resource Sharing) allows this backend to serve requests
-# from the frontend running on a different origin in development.
-# Without CORS, browsers block requests from a different host/port for security.
+# Wildcard CORS is acceptable for a hackathon demo.
+# In production lock this down to specific extension ID and dashboard URL.
+# Note: allow_credentials must be False when allow_origins is wildcard.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=["*"] ,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(meetings_router, prefix="/api", tags=["Meetings"])
+app.include_router(transcript_router, prefix="/api", tags=["Transcript"])
+app.include_router(meetings.router, prefix="/api/meetings", tags=["Meetings"])
+app.include_router(transcript.router, prefix="/api/transcript", tags=["Transcript"])
+app.include_router(debrief.router, prefix="/api/debrief", tags=["Debrief"])
+app.include_router(actions.router, prefix="/api/actions", tags=["Actions"])
+app.include_router(audio.router, prefix="/api/audio", tags=["Audio"])
+app.include_router(integrations.router, prefix="/api/integrations", tags=["Integrations"])
+app.include_router(websocket.router, tags=["WebSocket"])
 
 
 @app.get("/health")
 async def health_check():
-    """Simple health check endpoint."""
-    return {"status": "ok", "message": "Cteams API is running"}
+    return {"status": "ok", "service": "MeetMind API"}
 
 
 @app.get("/")
 async def read_root():
-    """Root endpoint provides basic welcome information."""
-    return {
-        "message": "Welcome to Cteams API",
-        "next": "Visit /docs for interactive API documentation",
-    }
+    return {"message": "Welcome to MeetMind API. Visit /docs for interactive documentation."}

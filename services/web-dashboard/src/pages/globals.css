@@ -1,0 +1,38 @@
+/* Injects Tailwind's reset and base browser normalisation styles. */
+@tailwind base;
+
+/* Makes Tailwind's reusable component classes available. */
+@tailwind components;
+
+/* Makes all Tailwind utility classes (e.g. flex, p-4) available. */
+@tailwind utilities;
+
+:root {
+  /* Primary brand colour used for buttons, links, and highlights. */
+  --color-brand: #6366f1;
+
+  /* Darker brand shade for hover and active states. */
+  --color-brand-dark: #4f46e5;
+
+  /* Destructive action colour (delete, error states). */
+  --color-danger: #ef4444;
+
+  /* Positive feedback colour (success toasts, completed items). */
+  --color-success: #22c55e;
+
+  /* Warning colour (conflicts, caution states). */
+  --color-warning: #f59e0b;
+
+  /* Card and panel surface colour. */
+  --color-surface: #ffffff;
+
+  /* Page background — dark keeps meeting dashboards readable under pressure. */
+  --color-background: #0f172a;
+
+  /* Primary text colour on dark backgrounds. */
+  --color-text: #f8fafc;
+}
+
+body {
+  background: #0f172a;
+}

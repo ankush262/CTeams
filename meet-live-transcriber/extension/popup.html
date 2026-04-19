@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Meet Live Transcriber</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body {
+        width: 280px;
+        padding: 20px;
+        font-family: "Google Sans", Roboto, sans-serif;
+        font-size: 14px;
+        background: #202124;
+        color: #e8eaed;
+      }
+      h3 {
+        font-size: 16px;
+        margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      h3 .dot {
+        width: 8px; height: 8px;
+        border-radius: 50%;
+        background: #5f6368;
+        display: inline-block;
+      }
+      h3 .dot.active { background: #34a853; animation: pulse 1.5s infinite; }
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+      p {
+        margin: 0 0 14px;
+        font-size: 12px;
+        color: #9aa0a6;
+        line-height: 1.4;
+      }
+      button {
+        width: 100%;
+        padding: 10px;
+        border: none;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background 0.2s;
+      }
+      #startBtn {
+        background: #8ab4f8;
+        color: #202124;
+      }
+      #startBtn:hover { background: #aecbfa; }
+      #startBtn:disabled {
+        background: #5f6368;
+        color: #9aa0a6;
+        cursor: not-allowed;
+      }
+      #stopBtn {
+        display: none;
+        background: #f28b82;
+        color: #202124;
+        margin-top: 8px;
+      }
+      #stopBtn:hover { background: #fba9a3; }
+      #status {
+        margin-top: 12px;
+        font-size: 11px;
+        color: #9aa0a6;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h3><span class="dot" id="indicator"></span> Meet Live Transcriber</h3>
+    <p>
+      Click <strong>Start Transcribing</strong> while on a Google Meet tab to
+      capture and transcribe audio in real time.
+    </p>
+    <button id="startBtn">▶ Start Transcribing</button>
+    <button id="stopBtn">■ Stop Transcribing</button>
+    <div id="status"></div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

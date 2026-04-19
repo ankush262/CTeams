@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MeetMind</title>
+    <style>
+      :root {
+        --bg: #0f172a;
+        --panel: #111c35;
+        --panel-2: #16213f;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #6366f1;
+        --accent-hover: #5256e6;
+        --danger: #ef4444;
+        --danger-hover: #dc2626;
+        --success: #22c55e;
+        --border: #25304a;
+        --badge: #1f2a44;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 360px;
+        min-height: 540px;
+        background: radial-gradient(120% 120% at 100% 0%, #1a2750 0%, var(--bg) 50%);
+        color: var(--text);
+        font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+      }
+
+      body {
+        display: flex;
+        justify-content: center;
+      }
+
+      .popup {
+        width: 100%;
+        padding: 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, var(--panel-2) 0%, var(--panel) 100%);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 12px;
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .brand {
+        font-size: 20px;
+        font-weight: 700;
+        color: var(--accent);
+        letter-spacing: 0.2px;
+      }
+
+      .connection-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        display: inline-block;
+      }
+
+      .dot-connected {
+        background: var(--success);
+        box-shadow: 0 0 10px rgba(34, 197, 94, 0.7);
+      }
+
+      .dot-disconnected {
+        background: var(--danger);
+        box-shadow: 0 0 10px rgba(239, 68, 68, 0.6);
+      }
+
+      .section-title {
+        margin: 0 0 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #c9d5f1;
+      }
+
+      .hidden {
+        display: none !important;
+      }
+
+      .btn {
+        width: 100%;
+        border: none;
+        border-radius: 10px;
+        padding: 11px 12px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 140ms ease, transform 120ms ease;
+      }
+
+      .btn:active {
+        transform: translateY(1px);
+      }
+
+      .btn-primary {
+        background: var(--accent);
+        color: var(--text);
+      }
+
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+
+      .btn-danger {
+        background: var(--danger);
+        color: var(--text);
+      }
+
+      .btn-danger:hover {
+        background: var(--danger-hover);
+      }
+
+      .btn-ghost {
+        background: transparent;
+        color: #d4def7;
+        border: 1px solid #33436a;
+      }
+
+      .btn-ghost:hover {
+        background: rgba(99, 102, 241, 0.12);
+      }
+
+      .meeting-hint {
+        margin: 8px 2px 0;
+        font-size: 12px;
+        color: var(--muted);
+        text-align: center;
+      }
+
+      .recording-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        font-size: 13px;
+      }
+
+      .recording-indicator {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 600;
+        color: #fecaca;
+      }
+
+      .dot-recording {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--danger);
+        box-shadow: 0 0 0 rgba(239, 68, 68, 0.6);
+        animation: pulse 1.2s infinite;
+      }
+
+      @keyframes pulse {
+        0% {
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+        }
+        70% {
+          box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+        }
+        100% {
+          box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+        }
+      }
+
+      .timer {
+        font-variant-numeric: tabular-nums;
+        color: #e2e8f0;
+      }
+
+      .transcript-box {
+        background: #0b1224;
+        border: 1px solid #253253;
+        border-radius: 10px;
+        padding: 10px;
+        font-size: 13px;
+        color: #e2e8f0;
+        line-height: 1.45;
+        max-height: 4.35em;
+        min-height: 4.35em;
+        overflow-y: auto;
+        scrollbar-width: thin;
+        scroll-behavior: smooth;
+      }
+
+      .transcript-placeholder {
+        color: #7f8fad;
+        font-style: italic;
+      }
+
+      .actions-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .actions-title {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: #d7e2ff;
+      }
+
+      .count-badge {
+        min-width: 24px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: var(--badge);
+        border: 1px solid #34456d;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 600;
+      }
+
+      .action-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .action-item {
+        display: grid;
+        grid-template-columns: 16px 1fr auto;
+        align-items: start;
+        gap: 8px;
+        background: #0d1730;
+        border: 1px solid #27345a;
+        border-radius: 9px;
+        padding: 8px;
+      }
+
+      .item-check {
+        width: 14px;
+        height: 14px;
+        margin-top: 2px;
+        border-radius: 3px;
+        border: 1px solid #4a5f94;
+        background: #0b1224;
+      }
+
+      .item-text {
+        font-size: 12px;
+        color: #dce7ff;
+        line-height: 1.35;
+      }
+
+      .owner-badge {
+        font-size: 11px;
+        background: rgba(99, 102, 241, 0.18);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        color: #dbe1ff;
+        border-radius: 999px;
+        padding: 2px 7px;
+        white-space: nowrap;
+      }
+
+      .footer {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .empty-label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="popup">
+      <section class="card header" aria-label="Connection Header">
+        <div class="brand">MeetMind</div>
+        <div id="connectionStatus" class="connection-status" aria-live="polite">
+          <span id="connectionDot" class="dot dot-disconnected"></span>
+          <span id="connectionText">Disconnected</span>
+        </div>
+      </section>
+
+      <section class="card" aria-label="Meeting Controls">
+        <h2 class="section-title">Meeting Status</h2>
+
+        <div id="idleState">
+          <button id="startMeetingBtn" class="btn btn-primary" type="button">Start Meeting</button>
+          <p class="meeting-hint">Click to start capturing this tab's audio</p>
+        </div>
+
+        <div id="recordingState" class="hidden">
+          <div class="recording-row">
+            <div class="recording-indicator">
+              <span class="dot-recording"></span>
+              <span>Recording</span>
+            </div>
+            <span id="elapsedTimer" class="timer">00:00</span>
+          </div>
+          <button id="endMeetingBtn" class="btn btn-danger" type="button">End Meeting</button>
+        </div>
+      </section>
+
+      <section id="transcriptSection" class="card hidden" aria-label="Live Transcript Preview">
+        <h2 class="section-title">Live Transcript</h2>
+        <div id="transcriptPreview" class="transcript-box" aria-live="polite">
+          <span class="transcript-placeholder">Waiting for speech...</span>
+        </div>
+      </section>
+
+      <section id="actionsSection" class="card hidden" aria-label="Action Items">
+        <div class="actions-header">
+          <h2 class="actions-title">Actions Detected</h2>
+          <span id="actionsCount" class="count-badge">0</span>
+        </div>
+        <div id="actionList" class="action-list">
+          <span class="empty-label">No action items yet</span>
+        </div>
+      </section>
+
+      <section class="footer" aria-label="Footer Actions">
+        <button id="openDashboardBtn" class="btn btn-ghost" type="button">Open Dashboard -&gt;</button>
+        <button id="copyDebriefBtn" class="btn btn-ghost hidden" type="button">Copy Debrief</button>
+      </section>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

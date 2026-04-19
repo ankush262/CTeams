@@ -1,0 +1,67 @@
+{
+  "_comment": [
+    "MANIFEST V3: Chrome's current extension platform (V2 was sunset in 2024).",
+    "V3 replaced persistent background pages with short-lived service workers,",
+    "tightened permissions, and banned remote code execution for security.",
+    "",
+    "WHY EACH PERMISSION:",
+    "  tabCapture  — captures the audio stream of a specific browser tab (the meeting tab).",
+    "                Unlike the 'microphone' permission, tabCapture captures the actual",
+    "                meeting call audio that is already decoded and playing in the tab,",
+    "                giving us clean speech without room echo or competing microphone noise.",
+    "  activeTab   — grants temporary access to the currently focused tab when the user",
+    "                clicks the extension icon, without requiring broad host permissions.",
+    "  storage     — persists the active meeting ID and user settings (API URL, device index)",
+    "                in Chrome's local storage so they survive popup close/reopen.",
+    "  scripting   — allows the background service worker to programmatically inject",
+    "                content.js into meeting tabs at runtime.",
+    "",
+    "WHY tabCapture INSTEAD OF MICROPHONE:",
+    "  The 'microphone' permission records from a physical input device (your mic).",
+    "  In a remote meeting the other participants' voices arrive as decoded audio",
+    "  playing through your speakers — not through your mic. tabCapture intercepts",
+    "  the decoded audio stream directly inside the browser tab before it reaches",
+    "  the speakers, giving us all participants' speech with no hardware setup.",
+    "",
+    "ICON NOTE:",
+    "  Icons will be added before the final demo."
+  ],
+
+  "manifest_version": 3,
+  "name": "MeetMind — Meeting Intelligence",
+  "description": "AI-powered live transcription and action item detection for meetings",
+  "version": "1.0.0",
+
+  "permissions": [
+    "tabCapture",
+    "activeTab",
+    "storage",
+    "scripting",
+    "offscreen"
+  ],
+
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "ws://localhost:8000/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://*.zoom.us/*",
+        "https://teams.microsoft.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html"
+  }
+}

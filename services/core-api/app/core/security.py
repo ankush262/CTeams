@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
 from jose import JWTError, jwt
@@ -6,16 +6,11 @@ from passlib.context import CryptContext
 
 from app.core.config import settings
 
-# Configure bcrypt for password hashing
+# Configure bcrypt for password hashing.
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# JWT (JSON Web Token) is a standard method for secure token-based authentication.
-# It's a digitally signed token that contains encoded claims (like user ID).
-# We use JWT to:
-#   1. Issue tokens after login - client stores token and sends it with each request
-#   2. Verify requests without querying the database each time - fast and stateless
-# "Signing" means using our SECRET_KEY to cryptographically seal the token data,
-# preventing tampering. Only the server can create or validate tokens with the secret.
+# JWT is a compact token format for passing login claims (like user id) between client and server.
+# We sign tokens with our secret key so the server can detect tampering instead of trusting client-provided data.
 
 
 def hash_password(password: str) -> str:
@@ -53,7 +48,7 @@ def create_access_token(data: dict) -> str:
         A signed JWT token string
     """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(
+    expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
     to_encode.update({"exp": expire})
